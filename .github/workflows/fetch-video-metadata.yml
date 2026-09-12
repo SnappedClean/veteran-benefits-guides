@@ -1,0 +1,81 @@
+name: Fetch YouTube metadata
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/fetch-video-metadata.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fetch video metadata
+        run: |
+          python - <<'PY'
+          import json, re, urllib.parse, urllib.request
+
+          ids = [
+            'B-MiqybeOnM','MCGvvOcISmg','VeWes2aVElw','YZBzkNOFnCM',
+            'PM9mmcLD1-c','wT27YbD6y7U','fhoUyf5vdjA','Ztovwcj0uyc',
+            'D2bHYblWhCA','aPVFxnf2xQw','VdNHEQ1P_DE'
+          ]
+          headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9'
+          }
+
+          def get(url):
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=30) as r:
+              return r.read().decode('utf-8', errors='replace')
+
+          out = []
+          for vid in ids:
+            watch = f'https://www.youtube.com/watch?v={vid}'
+            item = {'id': vid, 'watchUrl': watch}
+            try:
+              oe = 'https://www.youtube.com/oembed?url=' + urllib.parse.quote(watch, safe='') + '&format=json'
+              data = json.loads(get(oe))
+              item.update({
+                'title': data.get('title',''),
+                'author': data.get('author_name',''),
+                'thumbnail': data.get('thumbnail_url','')
+              })
+            except Exception as e:
+              item['oembedError'] = str(e)
+            try:
+              html = get(watch)
+              m = re.search(r'"shortDescription":"((?:\\.|[^"\\])*)"', html)
+              if m:
+                try: item['description'] = json.loads('"' + m.group(1) + '"')
+                except: item['description'] = ''
+              m = re.search(r'"keywords":\[(.*?)\]', html)
+              if m:
+                try: item['keywords'] = json.loads('[' + m.group(1) + ']')
+                except: item['keywords'] = []
+              m = re.search(r'"uploadDate":"([^"]+)"', html)
+              if m: item['uploadDate'] = m.group(1)
+              m = re.search(r'"lengthSeconds":"([^"]+)"', html)
+              if m: item['lengthSeconds'] = m.group(1)
+            except Exception as e:
+              item['watchError'] = str(e)
+            out.append(item)
+
+          with open('video-metadata.json','w',encoding='utf-8') as f:
+            json.dump(out, f, indent=2, ensure_ascii=False)
+          PY
+      - name: Commit metadata
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add video-metadata.json
+          git diff --cached --quiet || git commit -m 'chore: refresh YouTube video metadata'
+          git push
